@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html><head><title>Request Shelf</title></head><body>
+<div id="requestShelfConfig" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+<div data-role="content"><div class="content-primary">
+<h1>Request Shelf</h1>
+<form>
+<div class="inputContainer"><label for="rsUrl">Seerr address</label>
+<input id="rsUrl" is="emby-input" type="url" required placeholder="http://seerr:5055">
+<div class="fieldDescription">Use the address reachable from the Jellyfin container, including any base path.</div></div>
+<div class="inputContainer"><label for="rsKey">Seerr API key</label>
+<input id="rsKey" is="emby-input" type="password" autocomplete="off" required></div>
+<h2>Who can request?</h2>
+<p>Save the Seerr address and API key to load its Plex users. Enable each Jellyfin viewer and choose that person's account. Their Seerr request limits and approval settings apply. For a Jellyfin-backed Seerr instance, use Automatic.</p>
+<p class="rsAccountStatus" role="status"></p>
+<div class="rsUsers"></div>
+<p class="fieldDescription">Enabled viewers can search Seerr's catalog, including titles outside their Jellyfin library restrictions.</p>
+<p>In Jellyfin's global search, enter <b>Dune</b> to see library matches and request cards for missing titles. Open a request card and press Favorite. A series card requests season 1. Add <b>s2</b> or <b>all seasons</b> to choose a different scope. Reopen a card to refresh download progress from Seerr.</p>
+<button is="emby-button" type="submit" class="raised button-submit"><span>Save</span></button>
+<p class="rsSaveStatus" role="status" aria-live="polite"></p>
+</form></div></div>
+<script>
+(function () {
+    const page = document.querySelector('#requestShelfConfig');
+    const id = '2cb52794-23e3-4181-80e3-d43d18fde3a9';
+    const form = page.querySelector('form');
+    const status = form.querySelector('.rsSaveStatus');
+    const accountStatus = form.querySelector('.rsAccountStatus');
+    const button = form.querySelector('button');
+    let config, viewers;
+    const normal = value => value.replace(/-/g, '').toLowerCase();
+    function renderUsers(choices) {
+        const users = page.querySelector('.rsUsers');
+        users.replaceChildren();
+        const enabled = new Set((config.EnabledUsers || []).map(normal));
+        const links = new Map((config.PlexLinks || []).map(link => [normal(link.JellyfinUserId), link]));
+        viewers.forEach(user => {
+            const row = document.createElement('div');
+            row.className = 'inputContainer';
+            const label = document.createElement('label');
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.value = user.Id;
+            input.checked = enabled.has(normal(user.Id));
+            label.append(input, document.createTextNode(' ' + user.Name));
+            const select = document.createElement('select');
+            select.setAttribute('aria-label', 'Seerr account for ' + user.Name);
+            select.add(new Option('Automatic (linked Jellyfin user)', ''));
+            choices.forEach(choice => select.add(new Option(choice.name + ' (Seerr #' + choice.seerrUserId + ')',
+                choice.seerrUserId + ':' + choice.plexId)));
+            const saved = links.get(normal(user.Id));
+            if (saved) {
+                const value = saved.SeerrUserId + ':' + saved.PlexId;
+                if (!Array.from(select.options).some(option => option.value === value)) {
+                    select.add(new Option('Saved pairing (Seerr #' + saved.SeerrUserId + ')', value));
+                }
+                select.value = value;
+            }
+            select.disabled = !input.checked;
+            input.addEventListener('change', () => { select.disabled = !input.checked; });
+            row.append(label, document.createElement('br'), select);
+            users.append(row);
+        });
+    }
+    async function loadChoices() {
+        let choices = [];
+        if (config.SeerrUrl && config.ApiKey) {
+            try {
+                choices = await ApiClient.getJSON(ApiClient.getUrl('RequestShelf/Accounts'));
+                accountStatus.textContent = choices.length
+                    ? 'Choose the matching Plex user for each enabled viewer below.'
+                    : 'Seerr returned no Plex users. Automatic works for linked Jellyfin accounts.';
+            } catch {
+                accountStatus.textContent = 'Could not load Plex users. Check the Seerr address and API key, then save again. Existing pairings are shown below.';
+            }
+        } else accountStatus.textContent = 'Save the connection details above to load Plex users.';
+        renderUsers(choices);
+    }
+    page.addEventListener('pageshow', async function () {
+        button.disabled = true;
+        try {
+            [config, viewers] = await Promise.all([ApiClient.getPluginConfiguration(id), ApiClient.getUsers()]);
+            page.querySelector('#rsUrl').value = config.SeerrUrl || '';
+            page.querySelector('#rsKey').value = config.ApiKey || '';
+            await loadChoices();
+            status.textContent = '';
+            button.disabled = false;
+        } catch { status.textContent = 'Could not load settings. Reopen this page as a Jellyfin administrator.'; }
+    });
+    form.addEventListener('submit', async function (event) {
+        event.preventDefault();
+        const url = new URL(page.querySelector('#rsUrl').value.trim());
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+            status.textContent = 'Enter an HTTP or HTTPS server address without credentials, a query, or a fragment.'; return;
+        }
+        button.disabled = true;
+        try {
+            config.SeerrUrl = url.href.replace(/\/+$/, '');
+            config.ApiKey = page.querySelector('#rsKey').value.trim();
+            const enabled = Array.from(form.querySelectorAll('input[type=checkbox]:checked'));
+            config.EnabledUsers = enabled.map(input => input.value);
+            config.PlexLinks = enabled.flatMap(input => {
+                const selected = input.closest('.inputContainer').querySelector('select').value;
+                if (!selected) return [];
+                const [seerrUserId, plexId] = selected.split(':').map(Number);
+                return [{ JellyfinUserId: input.value, SeerrUserId: seerrUserId, PlexId: plexId }];
+            });
+            await ApiClient.updatePluginConfiguration(id, config);
+            await loadChoices();
+            status.textContent = 'Settings saved.';
+        } catch { status.textContent = 'Could not save settings.'; }
+        finally { button.disabled = false; }
+    });
+})();
+</script></div></body></html>

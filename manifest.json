@@ -1,0 +1,20 @@
+[
+  {
+    "guid": "2cb52794-23e3-4181-80e3-d43d18fde3a9",
+    "name": "Request Shelf",
+    "category": "General",
+    "owner": "neworiginal",
+    "overview": "Request movies and TV seasons through Seerr.",
+    "description": "Search Jellyfin for a title, request missing movies and seasons, and check download progress.",
+    "versions": [
+      {
+        "version": "1.2.0.0",
+        "targetAbi": "12.4.0.0",
+        "changelog": "Search Jellyfin normally to see playable titles followed by missing movies and shows. Request cards display Seerr download progress and refresh when reopened. Existing Jellyfin-to-Seerr account pairings carry over.",
+        "timestamp": "2026-11-18T22:50:04Z",
+        "checksum": "86e4fe01d656e8d56ca5d2c6e62f5143",
+        "sourceUrl": "https://raw.githubusercontent.com/neworiginal/jellyfin-plugin-request-shelf/main/packages/RequestShelf_1.2.0.0.zip"
+      }
+    ]
+  }
+]

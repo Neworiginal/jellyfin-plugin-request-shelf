@@ -1,0 +1,32 @@
+name: Build and publish plugin feed
+on:
+  push:
+    branches: [main]
+    paths: ['src/**', 'scripts/package.py', 'release-notes.txt', '.github/workflows/release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: request-shelf-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet build src/RequestShelf.csproj -c Release
+      - run: python3 scripts/package.py
+      - name: Publish updated catalog
+        run: |
+          git add manifest.json packages/
+          if ! git diff --cached --quiet; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git commit -m 'Publish Request Shelf plugin feed'
+            git push origin HEAD:main
+          fi
