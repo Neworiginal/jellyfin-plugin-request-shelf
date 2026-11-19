@@ -8,6 +8,14 @@
     "description": "Search Jellyfin for a title, request missing movies and seasons, and check download progress.",
     "versions": [
       {
+        "version": "1.3.3.0",
+        "targetAbi": "12.4.0.0",
+        "changelog": "Add optional Direct Radarr / Sonarr quiet testing mode to bypass Seerr request submission (and Seerr Discord notifications) while still using Seerr for catalog search.",
+        "timestamp": "2026-11-19T02:34:40Z",
+        "checksum": "da2151b49a46298822073387a6a5de77",
+        "sourceUrl": "https://raw.githubusercontent.com/Neworiginal/jellyfin-plugin-request-shelf/main/packages/RequestShelf_1.3.3.0.zip"
+      },
+      {
         "version": "1.3.2.0",
         "targetAbi": "12.4.0.0",
         "changelog": "TV show search cards now show the series itself instead of defaulting to Season 1; opening a TV show displays all individual seasons so you can request any season (or press Favorite on the show to request all seasons).",
