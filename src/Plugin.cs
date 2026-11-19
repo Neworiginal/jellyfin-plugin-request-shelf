@@ -38,14 +38,14 @@ public sealed class Plugin : BasePlugin<Configuration>, IHasWebPages
     public override string Description => "Search for a title, request missing movies and seasons through Seerr, and see live download progress.";
     public IEnumerable<PluginPageInfo> GetPages() =>
     [
-        new() { Name = Name, EmbeddedResourcePath = "RequestShelf.settings.html" },
         new() {
             Name = "RequestShelfDownloads",
             DisplayName = "Downloads",
             EmbeddedResourcePath = "RequestShelf.downloads.html",
             EnableInMainMenu = true,
             MenuIcon = "download"
-        }
+        },
+        new() { Name = Name, EmbeddedResourcePath = "RequestShelf.settings.html" }
     ];
 }
 

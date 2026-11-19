@@ -1,1 +1,1 @@
-Direct qBittorrent live download progress (speed, ETA, seeders, stalled state), unreleased title detection, a Home Screen "Downloads & Requests" tile for TV/mobile/web, a live auto-refreshing Web Downloads dashboard, and improved normal search compatibility across Jellyfin clients.
+Fix plugin Settings button opening the Downloads tab instead of Settings, and add a Settings shortcut button to the Downloads page.

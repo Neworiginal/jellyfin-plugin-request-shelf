@@ -27,7 +27,10 @@
       <h1 style="margin:0;">Downloads &amp; Requests</h1>
       <div class="rs-meta" id="rsDlMeta">Loading live status...</div>
     </div>
-    <button id="rsDlRefresh" is="emby-button" type="button" class="raised"><span>Refresh</span></button>
+    <div style="display:flex; gap:8px;">
+      <button id="rsDlSettings" is="emby-button" type="button" class="raised"><span>Settings</span></button>
+      <button id="rsDlRefresh" is="emby-button" type="button" class="raised"><span>Refresh</span></button>
+    </div>
   </div>
   <h2 id="rsActiveHeading">Active Downloads</h2>
   <div id="rsActiveList" class="rs-grid"></div>
@@ -41,6 +44,7 @@
     const activeList = page.querySelector('#rsActiveList');
     const pendingList = page.querySelector('#rsPendingList');
     const refreshBtn = page.querySelector('#rsDlRefresh');
+    const settingsBtn = page.querySelector('#rsDlSettings');
     let timer = null;
     let busy = false;
 
@@ -149,6 +153,13 @@
     }
 
     refreshBtn.addEventListener('click', load);
+    settingsBtn.addEventListener('click', () => {
+        if (window.Dashboard && typeof window.Dashboard.navigate === 'function') {
+            window.Dashboard.navigate('configurationpage?name=' + encodeURIComponent('Request Shelf'));
+        } else {
+            window.location.hash = '#!/configurationpage?name=' + encodeURIComponent('Request Shelf');
+        }
+    });
     page.addEventListener('pageshow', startPolling);
     page.addEventListener('pagehide', stopPolling);
 })();
