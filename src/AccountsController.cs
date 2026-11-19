@@ -58,10 +58,36 @@ public sealed class AccountsController(Seerr seerr) : ControllerBase
     }
 }
 
+public sealed record ArrTestResult(
+    [property: JsonPropertyName("message")] string Message);
+
 [ApiController]
 [Route("RequestShelf")]
-public sealed class DownloadsController(CardStore store, QBit qbit) : ControllerBase
+public sealed class DownloadsController(CardStore store, QBit qbit, ArrClient arr) : ControllerBase
 {
+    [HttpPost("TestArr")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
+    public async Task<ActionResult<ArrTestResult>> TestArr(CancellationToken ct)
+    {
+        var config = Plugin.Instance.Configuration;
+        var results = new List<string>();
+        try {
+            if (!string.IsNullOrWhiteSpace(config.RadarrUrl))
+                results.Add(await arr.Test(config.RadarrUrl, config.RadarrApiKey, "Radarr", ct));
+            if (!string.IsNullOrWhiteSpace(config.SonarrUrl))
+                results.Add(await arr.Test(config.SonarrUrl, config.SonarrApiKey, "Sonarr", ct));
+            if (results.Count == 0)
+                return Problem(statusCode: 400, detail: "Enter a Radarr and/or Sonarr URL and save settings first.");
+            return new ArrTestResult(string.Join(" · ", results));
+        } catch (ShelfError ex) {
+            return Problem(statusCode: ex.Status, detail: ex.Message);
+        } catch (OperationCanceledException) when (!ct.IsCancellationRequested) {
+            return Problem(statusCode: 504, detail: "Radarr/Sonarr took too long to respond.");
+        } catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException) {
+            return Problem(statusCode: 502, detail: "Could not reach Radarr/Sonarr. Check the saved addresses and API keys.");
+        }
+    }
     [HttpPost("TestQBit")]
     [Authorize(Policy = Policies.RequiresElevation)]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]

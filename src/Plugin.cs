@@ -25,6 +25,11 @@ public sealed class Configuration : BasePluginConfiguration
     public string QBitPassword { get; set; } = "";
     public string QBitCategories { get; set; } = "";
     public bool ShowDownloadsLibrary { get; set; } = true;
+    public bool DirectArrRequests { get; set; } = false;
+    public string RadarrUrl { get; set; } = "";
+    public string RadarrApiKey { get; set; } = "";
+    public string SonarrUrl { get; set; } = "";
+    public string SonarrApiKey { get; set; } = "";
     public PlexAccountLink[] PlexLinks { get; set; } = [];
     public Guid[] EnabledUsers { get; set; } = [];
 }
@@ -55,6 +60,7 @@ public sealed class Services : IPluginServiceRegistrator
     {
         services.AddSingleton<Seerr>();
         services.AddSingleton<QBit>();
+        services.AddSingleton<ArrClient>();
         services.AddSingleton<CardStore>();
         services.AddScoped<RequestFilter>();
         services.Configure<MvcOptions>(o => o.Filters.AddService<RequestFilter>());

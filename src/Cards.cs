@@ -190,7 +190,7 @@ internal sealed record Card(
 #pragma warning restore CS0618
 }
 
-public sealed class CardStore(Seerr seerr, QBit qbit) : IDisposable
+public sealed class CardStore(Seerr seerr, QBit qbit, ArrClient arr) : IDisposable
 {
     internal static readonly Guid DownloadsViewId = new("7f3a1c2e-9b4d-4e8a-b1c5-2d6f8a9c0e1b");
 
@@ -301,7 +301,12 @@ public sealed class CardStore(Seerr seerr, QBit qbit) : IDisposable
             var state = Status(card, detail, true, torrents);
             if (!submit || state.Covered) return state;
             if (!state.Allowed) throw new ShelfError(409, state.Label);
-            var receipt = await seerr.Submit(card, ct);
+            var receipt = 2;
+            if (card.Config.DirectArrRequests) {
+                await arr.Submit(card, detail, ct);
+            } else {
+                receipt = await seerr.Submit(card, ct);
+            }
             if (receipt == 1) {
                 state = new("Pending approval", true, true, "Submitted to Seerr and awaiting admin approval.");
             } else if (detail.IsUnreleased) {
@@ -311,7 +316,8 @@ public sealed class CardStore(Seerr seerr, QBit qbit) : IDisposable
                 var shortLabel = detail.FormattedReleaseDate is { } rd ? $"Unreleased ({rd})" : "Unreleased";
                 state = new(shortLabel, true, true, rel);
             } else {
-                state = new("Approved · Searching", true, true, "Request approved! Radarr/Sonarr is searching for a release now.");
+                var target = card.Config.DirectArrRequests ? (card.Type == "movie" ? "Radarr" : "Sonarr") : "Radarr/Sonarr";
+                state = new("Searching", true, true, $"Sent to {target}! Searching for a release now.");
             }
             Save((card.Config, card.Type, card.Title.Id, card.Season, "submitted"), state, TimeSpan.FromSeconds(20));
             return state;

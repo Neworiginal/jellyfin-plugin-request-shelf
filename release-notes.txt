@@ -1,1 +1,1 @@
-TV show search cards now show the series itself instead of defaulting to Season 1; opening a TV show displays all individual seasons so you can request any season (or press Favorite on the show to request all seasons).
+Add optional Direct Radarr / Sonarr quiet testing mode to bypass Seerr request submission (and Seerr Discord notifications) while still using Seerr for catalog search.

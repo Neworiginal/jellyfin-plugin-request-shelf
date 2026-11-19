@@ -29,9 +29,10 @@ internal sealed record MediaInfo(int Status, Season[]? Seasons, RequestInfo[]? R
 internal sealed record RequestMedia(int TmdbId, string? MediaType, int Status, Download[]? DownloadStatus);
 internal sealed record SeerrRequest(int Id, int Status, bool Is4k, RequestMedia? Media, Season[]? Seasons, string? CreatedAt);
 
+internal sealed record ExternalIds(int? TvdbId);
 internal sealed record Title(int Id, string? MediaType, string? Name,
     string? Overview, string? ReleaseDate, string? FirstAirDate, string? PosterPath,
-    bool Adult, MediaInfo? MediaInfo, Season[]? Seasons, string? Status = null)
+    bool Adult, MediaInfo? MediaInfo, Season[]? Seasons, string? Status = null, ExternalIds? ExternalIds = null)
 {
     [System.Text.Json.Serialization.JsonPropertyName("title")]
     public string? MovieTitle { get; init; }
