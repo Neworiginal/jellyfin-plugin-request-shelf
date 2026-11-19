@@ -13,11 +13,24 @@ using Microsoft.Extensions.Logging;
 
 namespace RequestShelf;
 
-internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplicationHost server,
+internal sealed class RequestFilter(CardStore store, Seerr seerr, QBit qbit, IServerApplicationHost server,
     IUserManager users, ILibraryManager library, ILogger<RequestFilter> logger) : IAsyncActionFilter
 {
     public async Task OnActionExecutionAsync(ActionExecutingContext ctx, ActionExecutionDelegate next)
     {
+        if (IsUserViews(ctx)) {
+            var executed = await next();
+            if (executed.Exception is null && executed.Result is ObjectResult native && native.StatusCode is null or < 300
+                && native.Value is QueryResult<BaseItemDto> views) {
+                var folder = CardStore.DownloadsFolder(server.SystemId);
+                if (!views.Items.Any(i => i.Id == folder.Id)) {
+                    native.Value = new QueryResult<BaseItemDto>(0, views.TotalRecordCount + 1,
+                        views.Items.Append(folder).ToArray());
+                }
+            }
+            return;
+        }
+
         if (OrdinarySearch(ctx) is { } search) {
             if (ctx.RouteData.Values["controller"] as string == "Items")
                 ctx.ActionArguments["enableTotalRecordCount"] = true;
@@ -34,6 +47,7 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
             }
             return;
         }
+
         try {
             var result = await Handle(ctx);
             if (result is not null) {
@@ -56,12 +70,26 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
         await next();
     }
 
-    private static readonly HashSet<string> GlobalSearchParameters = new(StringComparer.OrdinalIgnoreCase) {
-        "searchTerm", "userId", "includeItemTypes", "excludeItemTypes", "mediaTypes", "recursive",
-        "limit", "startIndex", "fields", "imageTypeLimit", "enableImages", "enableImageTypes",
-        "enableUserData", "enableTotalRecordCount", "isMissing", "includeMedia", "includePeople", "includeGenres",
-        "includeStudios", "includeArtists", "isMovie", "isSeries", "groupProgramsBySeries",
-        "api_key", "x-emby-token"
+    private static bool IsUserViews(ActionExecutingContext ctx)
+    {
+        var controller = ctx.RouteData.Values["controller"] as string;
+        var action = ctx.RouteData.Values["action"] as string;
+        if (controller != "UserViews" || action != "GetUserViews") return false;
+        var config = Plugin.Instance.Configuration;
+        if (!config.ShowDownloadsLibrary) return false;
+        var principal = ctx.HttpContext.User;
+        if (principal.Identity?.IsAuthenticated != true
+            || !Guid.TryParse(principal.FindFirst("Jellyfin-UserId")?.Value, out var owner)
+            || owner == Guid.Empty || !(config.EnabledUsers ?? []).Contains(owner))
+            return false;
+        if (ctx.ActionArguments.TryGetValue("userId", out var u) && u is Guid requested && requested != Guid.Empty && requested != owner)
+            return false;
+        return true;
+    }
+
+    private static readonly HashSet<string> DisallowedOrdinarySearchParameters = new(StringComparer.OrdinalIgnoreCase) {
+        "parentId", "artistIds", "albumIds", "genreIds", "genres", "studioIds", "studios",
+        "personIds", "person", "tags", "years", "officialRatings", "ids", "seriesId", "seasonId"
     };
 
     private static (bool Movies, bool Shows) Kinds(ActionExecutingContext ctx, SearchSpec spec)
@@ -91,8 +119,8 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
         var args = ctx.ActionArguments;
         if (!args.TryGetValue("searchTerm", out var raw) || raw is not string input) return null;
         var term = input.Trim();
-        if (term.Length is 0 or > 180 || SearchSpec.Parse(input) is not null ||
-            ctx.HttpContext.Request.Query.Keys.Any(k => !GlobalSearchParameters.Contains(k)) ||
+        if (term.Length is 0 or > 180 || SearchSpec.Parse(input) is not null || SearchSpec.IsDownloadsQuery(input) ||
+            ctx.HttpContext.Request.Query.Keys.Any(k => DisallowedOrdinarySearchParameters.Contains(k)) ||
             args.TryGetValue("includeMedia", out var media) && media is false ||
             args.TryGetValue("isMissing", out var missing) && missing is true) return null;
         var principal = ctx.HttpContext.User;
@@ -110,10 +138,14 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
         var user = users.GetUserById(search.Owner);
         if (user is null) return;
         var ct = ctx.HttpContext.RequestAborted;
-        // Bound the delay added to a normal search when Seerr is slow or offline.
+        // Bound the delay added to a normal search when Seerr or qBittorrent is slow or offline.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(TimeSpan.FromSeconds(3));
-        var found = await store.Search(search.Config, search.Owner, search.Spec, timeout.Token);
+        var searchTask = store.Search(search.Config, search.Owner, search.Spec, timeout.Token);
+        var qbitTask = qbit.GetTorrentMap(search.Config, timeout.Token);
+        await Task.WhenAll(searchTask, qbitTask);
+        var found = searchTask.Result;
+        var torrents = qbitTask.Result;
         var cards = found.Where(c => c.Type == "movie" ? search.Movies : search.Shows).DistinctBy(c => c.Id).ToArray();
         if (cards.Length == 0) return;
 
@@ -133,13 +165,14 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
                 !fallback.Any(i => i.GetBaseItemKind() == c.Kind && c.Title.Year.HasValue && i.ProductionYear == c.Title.Year &&
                     (string.Equals(i.Name, c.Title.DisplayName, StringComparison.OrdinalIgnoreCase) ||
                      string.Equals(i.OriginalTitle, c.Title.DisplayName, StringComparison.OrdinalIgnoreCase)))).ToArray();
+            if (cards.Length == 0) return;
         }
         int Arg(string key, int fallback) => ctx.ActionArguments.TryGetValue(key, out var v) && v is int n ? Math.Max(0, n) : fallback;
         var start = Arg("startIndex", 0);
         var limit = Arg("limit", int.MaxValue);
         IEnumerable<Card> Page(int localCount, int localTotal) =>
             cards.Skip(Math.Max(0, start - localTotal)).Take(Math.Max(0, limit - localCount));
-        State Current(Card c) => store.Status(c, c.Title, false);
+        State Current(Card c) => store.Status(c, c.Title, false, torrents);
         bool roku = ctx.HttpContext.User.FindFirst("Jellyfin-Client")?.Value.Contains("Roku", StringComparison.OrdinalIgnoreCase) == true;
         if (native.Value is QueryResult<BaseItemDto> items) {
             var extra = Page(items.Items.Count, items.TotalRecordCount).Select(c => c.Item(server.SystemId, Current(c), roku));
@@ -165,36 +198,73 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
         T[] Many<T>(string name) => args.TryGetValue(name, out var v) && v is T[] t ? t : [];
         var ct = ctx.HttpContext.RequestAborted;
 
-        var spec = items || hints ? SearchSpec.Parse(args.TryGetValue("searchTerm", out var v) ? v as string : null) : null;
+        var rawSearch = items || hints ? (args.TryGetValue("searchTerm", out var v) ? v as string : null) : null;
+        var isDownloadsSearch = SearchSpec.IsDownloadsQuery(rawSearch);
+        var spec = !isDownloadsSearch && (items || hints) ? SearchSpec.Parse(rawSearch) : null;
         Guid? id = Arg<Guid>("itemId") ?? Arg<Guid>("seriesId") ?? Arg<Guid>("parentId");
         var ids = items ? Many<Guid>("ids") : [];
         if (!id.HasValue && ids.Length == 1) id = ids[0];
-        var card = id.HasValue ? store.Find(id.Value) : null;
-        if (card is null && spec is null) return null;
+
+        var isDownloadsFolder = id == CardStore.DownloadsViewId;
+        var card = id.HasValue && !isDownloadsFolder ? store.Find(id.Value) : null;
+        if (card is null && spec is null && !isDownloadsFolder && !isDownloadsSearch) return null;
+
         var config = Plugin.Instance.Configuration;
         if (card is not null && !ReferenceEquals(config, card.Config)) return new NotFoundResult();
         if (card is not null && controller == "Image" && action is "GetItemImage" or "GetItemImageByIndex" or "GetItemImage2") {
             if (!card.WithPoster || Arg<ImageType>("imageType") != ImageType.Primary) return new NotFoundResult();
             return new FileContentResult(await seerr.Poster(card.Title.PosterPath!, ct), "image/jpeg");
         }
+        if (isDownloadsFolder && controller == "Image") return new NotFoundResult();
 
         var principal = ctx.HttpContext.User;
         if (principal.Identity?.IsAuthenticated != true || !Guid.TryParse(principal.FindFirst("Jellyfin-UserId")?.Value, out var owner)
-            || owner == Guid.Empty || !(config.EnabledUsers ?? []).Contains(owner) || (Arg<Guid>("userId") is Guid supplied && supplied != owner)
+            || owner == Guid.Empty || !(config.EnabledUsers ?? []).Contains(owner) || (Arg<Guid>("userId") is Guid supplied && supplied != Guid.Empty && supplied != owner)
             || (card is not null && card.Owner != owner))
             return Error(403, "Request Shelf is disabled for this account.");
 
         // Roku 3.2.4 has a Favorite button on movie details but none on series details.
         bool roku = principal.FindFirst("Jellyfin-Client")?.Value.Contains("Roku", StringComparison.OrdinalIgnoreCase) == true;
+
+        if (isDownloadsFolder) {
+            if (items && Arg<Guid>("parentId") == CardStore.DownloadsViewId) {
+                var entries = await store.GetDownloads(config, owner, ct);
+                var start = Math.Max(0, Arg<int>("startIndex") ?? 0);
+                var limit = Math.Clamp(Arg<int>("limit") ?? 50, 0, 100);
+                var slice = entries.Skip(start).Take(limit)
+                    .Select(e => e.Card.Item(server.SystemId, e.State, roku)).ToArray();
+                return new OkObjectResult(new QueryResult<BaseItemDto>(start, entries.Length, slice));
+            }
+            if ((controller == "UserLibrary" && action is "GetItem" or "GetItemLegacy") || (items && ids.Length == 1)) {
+                var folder = CardStore.DownloadsFolder(server.SystemId);
+                return new OkObjectResult(items ? new QueryResult<BaseItemDto>([folder]) : folder);
+            }
+            if (controller == "Items" && action is "GetItemUserData" or "GetItemUserDataLegacy")
+                return new OkObjectResult(new UserItemDataDto { ItemId = CardStore.DownloadsViewId, Key = CardStore.DownloadsViewId.ToString("N") });
+            return new OkObjectResult(new QueryResult<BaseItemDto>());
+        }
+
+        if (isDownloadsSearch) {
+            var entries = await store.GetDownloads(config, owner, ct);
+            var start = Math.Max(0, Arg<int>("startIndex") ?? 0);
+            var limit = Math.Clamp(Arg<int>("limit") ?? 30, 0, 50);
+            var slice = entries.Skip(start).Take(limit);
+            if (hints) return new OkObjectResult(new SearchHintResult(slice.Select(e => e.Card.Hint(e.State)).ToArray(), entries.Length));
+            return new OkObjectResult(new QueryResult<BaseItemDto>(start, entries.Length,
+                slice.Select(e => e.Card.Item(server.SystemId, e.State, roku)).ToArray()));
+        }
+
         if (spec is not null) {
             var start = Math.Max(0, Arg<int>("startIndex") ?? 0);
             var limit = Math.Clamp(Arg<int>("limit") ?? 20, 0, 20);
             var (movies, shows) = Kinds(ctx, spec);
+            var qbitTask = qbit.GetTorrentMap(config, ct);
             var found = spec.Term.Length is > 0 and <= 180 && (movies || shows) && Arg<Guid>("parentId") is null && Arg<bool>("includeMedia") != false
                 ? await store.Search(config, owner, spec, ct) : [];
+            var torrents = await qbitTask;
             var matches = found.Where(c => c.Type == "movie" ? movies : shows).ToArray();
             var slice = matches.Skip(start).Take(limit);
-            State StatusOf(Card c) => store.Status(c, c.Title, false);
+            State StatusOf(Card c) => store.Status(c, c.Title, false, torrents);
             if (hints) return new OkObjectResult(new SearchHintResult(slice.Select(c => c.Hint(StatusOf(c))).ToArray(), matches.Length));
             return new OkObjectResult(new QueryResult<BaseItemDto>(start, matches.Length,
                 slice.Select(c => c.Item(server.SystemId, StatusOf(c), roku)).ToArray()));
@@ -207,11 +277,22 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, IServerApplica
         }
         if ((controller == "UserLibrary" && action is "GetItem" or "GetItemLegacy") ||
             (controller == "Items" && action is "GetItemUserData" or "GetItemUserDataLegacy") || (items && ids.Length == 1)) {
-            var detail = await seerr.Details(card, ct);
-            var state = store.Status(card, detail, true);
-            if (controller == "Items" && !items) return new OkObjectResult(card.UserData(state));
-            var item = card.Item(server.SystemId, state, roku, detail.Overview);
-            return new OkObjectResult(items ? new QueryResult<BaseItemDto>([item]) : item);
+            if (card.StandaloneTorrent is not null) {
+                var torrents = await qbit.GetTorrentMap(config, ct);
+                var state = card.ReadState(card.Title, true, torrents);
+                if (controller == "Items" && !items) return new OkObjectResult(card.UserData(state));
+                var item = card.Item(server.SystemId, state, roku);
+                return new OkObjectResult(items ? new QueryResult<BaseItemDto>([item]) : item);
+            } else {
+                var detailTask = seerr.Details(card, ct);
+                var qbitTask = qbit.GetTorrentMap(config, ct);
+                await Task.WhenAll(detailTask, qbitTask);
+                var detail = detailTask.Result;
+                var state = store.Status(card, detail, true, qbitTask.Result);
+                if (controller == "Items" && !items) return new OkObjectResult(card.UserData(state));
+                var item = card.Item(server.SystemId, state, roku, detail.Overview);
+                return new OkObjectResult(items ? new QueryResult<BaseItemDto>([item]) : item);
+            }
         }
         if (controller == "Library" && action == "GetThemeMedia")
             return new OkObjectResult(new AllThemeMediaResult());

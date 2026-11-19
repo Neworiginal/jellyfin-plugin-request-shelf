@@ -38,11 +38,14 @@ The optional `req Dune` form searches only the Seerr catalog. Use a season suffi
 
 Opening results only browses the catalog. Press the heart on a **Request** card to submit. Reopen the card to see Seerr's current state, particularly on Roku where the heart can change before a failed request is reported. Use Seerr to manage or cancel requests. After a download imports, search normally to play the Jellyfin library copy.
 
-## Download progress
+## Download progress and "Downloads & Requests"
 
-A request card can show **Pending approval**, **Processing**, **Downloading 42%**, or **Downloaded · Awaiting import**. Reopen the card to get the latest queue state. Search results can be cached for 12 seconds. Once Jellyfin scans the import, normal search opens the playable library item.
+1. **Direct qBittorrent live progress (optional):** In **Dashboard → Plugins → My Plugins → Request Shelf → Settings**, enter your qBittorrent WebUI address (e.g. `http://192.168.1.42:8080`), optional username/password (leave blank if LAN auth bypass is enabled), and optional category filter (e.g. `radarr, tv-sonarr`). Request cards and the Downloads views will show real-time percentage, download speed, ETA, seeders, and stalled/importing states directly from qBittorrent.
+2. **Home Screen tile (TV, Mobile, Roku, Fire TV, and Web):** Enabled viewers see a **Downloads & Requests** tile in Jellyfin's Home Screen **My Media** row showing active downloads, searching requests, and unreleased monitored titles. You can also search `downloads` in global Search.
+3. **Live Web dashboard:** In Jellyfin Web, open **Downloads** from the dashboard sidebar for an auto-refreshing view with live progress bars, speeds, and ETAs.
+4. **Unreleased & searching states:** Requesting an unreleased movie or show reports its release date (e.g. `Unreleased (Dec 18, 2026)`) instead of a generic processing state, and released requests awaiting a grab show `Searching`.
 
-Progress uses the regular Radarr or Sonarr queue Seerr already tracks. Under **Seerr → Settings → Services**, edit those connections and turn on **Enable Scan**. qBittorrent credentials stay in Radarr and Sonarr. When a release has not entered the queue, or transfer sizes are unavailable, the card shows the status Seerr can report. For TV, the percentage covers active transfers for the season selected. A season pack counts once. Use `all seasons` to include transfers whose season number Seerr has not supplied.
+If qBittorrent is not configured, progress falls back to the Radarr/Sonarr queue Seerr tracks (turn on **Enable Scan** under **Seerr → Settings → Services**). Once Jellyfin scans the imported file, normal search opens the playable library item.
 
 ## If the first request doesn't arrive
 

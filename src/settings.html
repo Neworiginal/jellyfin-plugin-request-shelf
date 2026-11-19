@@ -4,17 +4,38 @@
 <div data-role="content"><div class="content-primary">
 <h1>Request Shelf</h1>
 <form>
+<h2>Seerr</h2>
 <div class="inputContainer"><label for="rsUrl">Seerr address</label>
-<input id="rsUrl" is="emby-input" type="url" required placeholder="http://seerr:5055">
+<input id="rsUrl" is="emby-input" type="url" required placeholder="http://192.168.1.42:5055">
 <div class="fieldDescription">Use the address reachable from the Jellyfin container, including any base path.</div></div>
 <div class="inputContainer"><label for="rsKey">Seerr API key</label>
 <input id="rsKey" is="emby-input" type="password" autocomplete="off" required></div>
+
+<h2>qBittorrent (Live Progress · Optional)</h2>
+<div class="inputContainer"><label for="rsQBitUrl">qBittorrent WebUI address</label>
+<input id="rsQBitUrl" is="emby-input" type="url" placeholder="http://192.168.1.42:8080">
+<div class="fieldDescription">Connect directly to qBittorrent for real-time progress %, download speed, ETA, seeders, and stalled status.</div></div>
+<div class="inputContainer"><label for="rsQBitUser">qBittorrent username</label>
+<input id="rsQBitUser" is="emby-input" type="text" autocomplete="off" placeholder="Leave blank if LAN auth bypass is enabled"></div>
+<div class="inputContainer"><label for="rsQBitPass">qBittorrent password</label>
+<input id="rsQBitPass" is="emby-input" type="password" autocomplete="off"></div>
+<div class="inputContainer"><label for="rsQBitCats">Category filter (optional)</label>
+<input id="rsQBitCats" is="emby-input" type="text" placeholder="radarr, tv-sonarr">
+<div class="fieldDescription">Comma-separated qBittorrent categories to include for unmatched active torrents. Leave blank to show all active downloads.</div></div>
+<div class="inputContainer">
+<label><input id="rsShowLib" type="checkbox" checked> Show <b>Downloads &amp; Requests</b> tile on the Home Screen (works on TV, Mobile, Roku, Fire TV, and Web)</label>
+</div>
+<div class="inputContainer">
+<button id="rsTestQBit" is="emby-button" type="button" class="raised"><span>Test saved qBittorrent connection</span></button>
+<p class="rsQBitStatus" role="status" aria-live="polite"></p>
+</div>
+
 <h2>Who can request?</h2>
 <p>Save the Seerr address and API key to load its Plex users. Enable each Jellyfin viewer and choose that person's account. Their Seerr request limits and approval settings apply. For a Jellyfin-backed Seerr instance, use Automatic.</p>
 <p class="rsAccountStatus" role="status"></p>
 <div class="rsUsers"></div>
 <p class="fieldDescription">Enabled viewers can search Seerr's catalog, including titles outside their Jellyfin library restrictions.</p>
-<p>In Jellyfin's global search, enter <b>Dune</b> to see library matches and request cards for missing titles. Open a request card and press Favorite. A series card requests season 1. Add <b>s2</b> or <b>all seasons</b> to choose a different scope. Reopen a card to refresh download progress from Seerr.</p>
+<p>In Jellyfin's global search, enter <b>Dune</b> to see library matches and request cards for missing titles. Open a request card and press Favorite. A series card requests season 1. Add <b>s2</b> or <b>all seasons</b> to choose a different scope. Open the <b>Downloads &amp; Requests</b> tile on the Home Screen (or search <b>downloads</b>) to see active downloads and pending requests.</p>
 <button is="emby-button" type="submit" class="raised button-submit"><span>Save</span></button>
 <p class="rsSaveStatus" role="status" aria-live="polite"></p>
 </form></div></div>
@@ -25,9 +46,18 @@
     const form = page.querySelector('form');
     const status = form.querySelector('.rsSaveStatus');
     const accountStatus = form.querySelector('.rsAccountStatus');
-    const button = form.querySelector('button');
+    const qbitStatus = form.querySelector('.rsQBitStatus');
+    const button = form.querySelector('button[type=submit]');
+    const testBtn = page.querySelector('#rsTestQBit');
     let config, viewers;
     const normal = value => value.replace(/-/g, '').toLowerCase();
+    function validateHttpUrl(raw) {
+        const url = new URL(raw);
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+            return null;
+        }
+        return url.href.replace(/\/+$/, '');
+    }
     function renderUsers(choices) {
         const users = page.querySelector('.rsUsers');
         users.replaceChildren();
@@ -81,22 +111,58 @@
             [config, viewers] = await Promise.all([ApiClient.getPluginConfiguration(id), ApiClient.getUsers()]);
             page.querySelector('#rsUrl').value = config.SeerrUrl || '';
             page.querySelector('#rsKey').value = config.ApiKey || '';
+            page.querySelector('#rsQBitUrl').value = config.QBitUrl || '';
+            page.querySelector('#rsQBitUser').value = config.QBitUsername || '';
+            page.querySelector('#rsQBitPass').value = config.QBitPassword || '';
+            page.querySelector('#rsQBitCats').value = config.QBitCategories || '';
+            page.querySelector('#rsShowLib').checked = config.ShowDownloadsLibrary !== false;
             await loadChoices();
             status.textContent = '';
+            qbitStatus.textContent = '';
             button.disabled = false;
         } catch { status.textContent = 'Could not load settings. Reopen this page as a Jellyfin administrator.'; }
     });
+    testBtn.addEventListener('click', async function () {
+        testBtn.disabled = true;
+        qbitStatus.textContent = 'Testing qBittorrent connection...';
+        try {
+            const res = await ApiClient.ajax({
+                type: 'POST',
+                url: ApiClient.getUrl('RequestShelf/TestQBit'),
+                dataType: 'json'
+            });
+            qbitStatus.textContent = 'Connected! Found ' + res.totalTorrents + ' torrent(s), ' + res.activeDownloads + ' active download(s).';
+        } catch (err) {
+            qbitStatus.textContent = 'Could not connect to qBittorrent. Save your settings first and verify the URL/credentials.';
+        } finally {
+            testBtn.disabled = false;
+        }
+    });
     form.addEventListener('submit', async function (event) {
         event.preventDefault();
-        const url = new URL(page.querySelector('#rsUrl').value.trim());
-        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
-            status.textContent = 'Enter an HTTP or HTTPS server address without credentials, a query, or a fragment.'; return;
+        let seerrUrl;
+        try { seerrUrl = validateHttpUrl(page.querySelector('#rsUrl').value.trim()); } catch { seerrUrl = null; }
+        if (!seerrUrl) {
+            status.textContent = 'Enter an HTTP or HTTPS Seerr server address without credentials, a query, or a fragment.'; return;
+        }
+        const rawQBit = page.querySelector('#rsQBitUrl').value.trim();
+        let qbitUrl = '';
+        if (rawQBit) {
+            try { qbitUrl = validateHttpUrl(rawQBit); } catch { qbitUrl = null; }
+            if (!qbitUrl) {
+                status.textContent = 'Enter a valid HTTP or HTTPS qBittorrent address without credentials, a query, or a fragment.'; return;
+            }
         }
         button.disabled = true;
         try {
-            config.SeerrUrl = url.href.replace(/\/+$/, '');
+            config.SeerrUrl = seerrUrl;
             config.ApiKey = page.querySelector('#rsKey').value.trim();
-            const enabled = Array.from(form.querySelectorAll('input[type=checkbox]:checked'));
+            config.QBitUrl = qbitUrl;
+            config.QBitUsername = page.querySelector('#rsQBitUser').value.trim();
+            config.QBitPassword = page.querySelector('#rsQBitPass').value;
+            config.QBitCategories = page.querySelector('#rsQBitCats').value.trim();
+            config.ShowDownloadsLibrary = page.querySelector('#rsShowLib').checked;
+            const enabled = Array.from(form.querySelectorAll('.rsUsers input[type=checkbox]:checked'));
             config.EnabledUsers = enabled.map(input => input.value);
             config.PlexLinks = enabled.flatMap(input => {
                 const selected = input.closest('.inputContainer').querySelector('select').value;

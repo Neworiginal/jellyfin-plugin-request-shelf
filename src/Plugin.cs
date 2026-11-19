@@ -20,6 +20,11 @@ public sealed class Configuration : BasePluginConfiguration
 {
     public string SeerrUrl { get; set; } = "";
     public string ApiKey { get; set; } = "";
+    public string QBitUrl { get; set; } = "";
+    public string QBitUsername { get; set; } = "";
+    public string QBitPassword { get; set; } = "";
+    public string QBitCategories { get; set; } = "";
+    public bool ShowDownloadsLibrary { get; set; } = true;
     public PlexAccountLink[] PlexLinks { get; set; } = [];
     public Guid[] EnabledUsers { get; set; } = [];
 }
@@ -30,9 +35,18 @@ public sealed class Plugin : BasePlugin<Configuration>, IHasWebPages
     public Plugin(IApplicationPaths paths, IXmlSerializer serializer) : base(paths, serializer) => Instance = this;
     public override Guid Id => new("2cb52794-23e3-4181-80e3-d43d18fde3a9");
     public override string Name => "Request Shelf";
-    public override string Description => "Search for a title, request missing movies and seasons through Seerr, and see download progress.";
+    public override string Description => "Search for a title, request missing movies and seasons through Seerr, and see live download progress.";
     public IEnumerable<PluginPageInfo> GetPages() =>
-        [new() { Name = Name, EmbeddedResourcePath = "RequestShelf.settings.html" }];
+    [
+        new() { Name = Name, EmbeddedResourcePath = "RequestShelf.settings.html" },
+        new() {
+            Name = "RequestShelfDownloads",
+            DisplayName = "Downloads",
+            EmbeddedResourcePath = "RequestShelf.downloads.html",
+            EnableInMainMenu = true,
+            MenuIcon = "download"
+        }
+    ];
 }
 
 public sealed class Services : IPluginServiceRegistrator
@@ -40,6 +54,7 @@ public sealed class Services : IPluginServiceRegistrator
     public void RegisterServices(IServiceCollection services, IServerApplicationHost applicationHost)
     {
         services.AddSingleton<Seerr>();
+        services.AddSingleton<QBit>();
         services.AddSingleton<CardStore>();
         services.AddScoped<RequestFilter>();
         services.Configure<MvcOptions>(o => o.Filters.AddService<RequestFilter>());

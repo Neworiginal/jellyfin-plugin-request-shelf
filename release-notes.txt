@@ -1,1 +1,1 @@
-Search Jellyfin normally to see playable titles followed by missing movies and shows. Request cards display Seerr download progress and refresh when reopened. Existing Jellyfin-to-Seerr account pairings carry over.
+Direct qBittorrent live download progress (speed, ETA, seeders, stalled state), unreleased title detection, a Home Screen "Downloads & Requests" tile for TV/mobile/web, a live auto-refreshing Web Downloads dashboard, and improved normal search compatibility across Jellyfin clients.

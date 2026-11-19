@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html><head><title>Downloads &amp; Requests</title></head><body>
+<div id="requestShelfDownloads" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-button">
+<style>
+  #requestShelfDownloads .rs-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:18px; }
+  #requestShelfDownloads .rs-meta { font-size:0.9em; opacity:0.8; }
+  #requestShelfDownloads .rs-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); gap:14px; margin-bottom:24px; }
+  #requestShelfDownloads .rs-card { display:flex; gap:12px; padding:12px; border-radius:8px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08); }
+  #requestShelfDownloads .rs-poster { width:64px; height:96px; border-radius:6px; object-fit:cover; background:rgba(255,255,255,0.08); flex-shrink:0; }
+  #requestShelfDownloads .rs-body { flex:1; min-width:0; display:flex; flex-direction:column; gap:6px; }
+  #requestShelfDownloads .rs-title { font-weight:600; font-size:1.02em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #requestShelfDownloads .rs-sub { font-size:0.85em; opacity:0.75; }
+  #requestShelfDownloads .rs-badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:0.78em; font-weight:600; align-self:flex-start; }
+  #requestShelfDownloads .rs-badge-dl { background:rgba(0,164,220,0.22); color:#4cc9f0; }
+  #requestShelfDownloads .rs-badge-imp { background:rgba(46,204,113,0.22); color:#6ee7b7; }
+  #requestShelfDownloads .rs-badge-warn { background:rgba(245,158,11,0.22); color:#fcd34d; }
+  #requestShelfDownloads .rs-badge-err { background:rgba(239,68,68,0.22); color:#fca5a5; }
+  #requestShelfDownloads .rs-badge-unrel { background:rgba(168,85,247,0.22); color:#d8b4fe; }
+  #requestShelfDownloads .rs-bar { height:7px; border-radius:4px; background:rgba(255,255,255,0.12); overflow:hidden; }
+  #requestShelfDownloads .rs-fill { height:100%; background:#00a4dc; transition:width 0.4s ease; }
+  #requestShelfDownloads .rs-stats { font-size:0.82em; opacity:0.85; line-height:1.35; }
+  #requestShelfDownloads .rs-empty { padding:20px; border-radius:8px; background:rgba(255,255,255,0.04); opacity:0.8; }
+</style>
+<div data-role="content"><div class="content-primary">
+  <div class="rs-header">
+    <div>
+      <h1 style="margin:0;">Downloads &amp; Requests</h1>
+      <div class="rs-meta" id="rsDlMeta">Loading live status...</div>
+    </div>
+    <button id="rsDlRefresh" is="emby-button" type="button" class="raised"><span>Refresh</span></button>
+  </div>
+  <h2 id="rsActiveHeading">Active Downloads</h2>
+  <div id="rsActiveList" class="rs-grid"></div>
+  <h2 id="rsPendingHeading">Pending &amp; Unreleased Requests</h2>
+  <div id="rsPendingList" class="rs-grid"></div>
+</div></div>
+<script>
+(function () {
+    const page = document.querySelector('#requestShelfDownloads');
+    const meta = page.querySelector('#rsDlMeta');
+    const activeList = page.querySelector('#rsActiveList');
+    const pendingList = page.querySelector('#rsPendingList');
+    const refreshBtn = page.querySelector('#rsDlRefresh');
+    let timer = null;
+    let busy = false;
+
+    function badgeClass(item) {
+        const s = (item.state || '').toLowerCase();
+        if (s === 'error' || s === 'failed') return 'rs-badge rs-badge-err';
+        if (s === 'importing') return 'rs-badge rs-badge-imp';
+        if (s === 'unreleased') return 'rs-badge rs-badge-unrel';
+        if (s.includes('stalled') || s.includes('warn') || s.includes('paused') || s.includes('queued') || s === 'pending') return 'rs-badge rs-badge-warn';
+        return 'rs-badge rs-badge-dl';
+    }
+
+    function renderCard(item) {
+        const card = document.createElement('div');
+        card.className = 'rs-card';
+        if (item.posterUrl) {
+            const img = document.createElement('img');
+            img.className = 'rs-poster';
+            img.alt = item.title;
+            img.src = ApiClient.getUrl(item.posterUrl.replace(/^\//, ''));
+            card.append(img);
+        }
+        const body = document.createElement('div');
+        body.className = 'rs-body';
+
+        const title = document.createElement('div');
+        title.className = 'rs-title';
+        title.title = item.title;
+        title.textContent = item.title;
+        body.append(title);
+
+        const sub = document.createElement('div');
+        sub.className = 'rs-sub';
+        const subParts = [item.scope];
+        if (item.year) subParts.push(String(item.year));
+        if (item.size) subParts.push(item.size);
+        sub.textContent = subParts.filter(Boolean).join(' · ');
+        body.append(sub);
+
+        const badge = document.createElement('span');
+        badge.className = badgeClass(item);
+        badge.textContent = item.label;
+        body.append(badge);
+
+        if (typeof item.percent === 'number') {
+            const bar = document.createElement('div');
+            bar.className = 'rs-bar';
+            const fill = document.createElement('div');
+            fill.className = 'rs-fill';
+            fill.style.width = Math.max(0, Math.min(100, item.percent)) + '%';
+            bar.append(fill);
+            body.append(bar);
+        }
+
+        const stats = document.createElement('div');
+        stats.className = 'rs-stats';
+        const statParts = [];
+        if (item.speed) statParts.push(item.speed);
+        if (item.eta) statParts.push('ETA ' + item.eta);
+        if (typeof item.seeders === 'number') statParts.push(item.seeders + ' seeders');
+        stats.textContent = statParts.length ? statParts.join(' · ') : (item.detail || '');
+        body.append(stats);
+
+        card.append(body);
+        return card;
+    }
+
+    function renderGroup(container, items, emptyText) {
+        container.replaceChildren();
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'rs-empty';
+            empty.textContent = emptyText;
+            container.append(empty);
+            return;
+        }
+        items.forEach(item => container.append(renderCard(item)));
+    }
+
+    async function load() {
+        if (busy) return;
+        busy = true;
+        try {
+            const data = await ApiClient.getJSON(ApiClient.getUrl('RequestShelf/Downloads'));
+            const items = data.items || [];
+            const active = items.filter(i => i.isActive);
+            const pending = items.filter(i => !i.isActive);
+            renderGroup(activeList, active, 'No active downloads right now.');
+            renderGroup(pendingList, pending, 'No pending or unreleased requests.');
+            const source = data.qbitConfigured ? 'Live via qBittorrent + Seerr' : 'Via Seerr (add qBittorrent in Settings for live speed & ETA)';
+            meta.textContent = active.length + ' active · ' + pending.length + ' pending/unreleased · ' + source + ' · Updated ' + new Date().toLocaleTimeString();
+        } catch {
+            meta.textContent = 'Could not load downloads. Make sure Request Shelf is enabled for your account.';
+        } finally {
+            busy = false;
+        }
+    }
+
+    function startPolling() {
+        stopPolling();
+        load();
+        timer = setInterval(() => { if (!document.hidden) load(); }, 3000);
+    }
+    function stopPolling() {
+        if (timer) { clearInterval(timer); timer = null; }
+    }
+
+    refreshBtn.addEventListener('click', load);
+    page.addEventListener('pageshow', startPolling);
+    page.addEventListener('pagehide', stopPolling);
+})();
+</script></div></body></html>

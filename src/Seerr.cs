@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -18,15 +19,32 @@ internal sealed record ResultPage<T>(T[] Results);
 internal sealed record Season(int SeasonNumber, int EpisodeCount, int Status);
 internal sealed record RequestInfo(bool Is4k, int Status, Season[]? Seasons);
 internal sealed record MediaInfo(int Status, Season[]? Seasons, RequestInfo[]? Requests, Download[]? DownloadStatus);
+internal sealed record RequestMedia(int TmdbId, string? MediaType, int Status, Download[]? DownloadStatus);
+internal sealed record SeerrRequest(int Id, int Status, bool Is4k, RequestMedia? Media, Season[]? Seasons, string? CreatedAt);
+
 internal sealed record Title(int Id, string? MediaType, string? Name,
     string? Overview, string? ReleaseDate, string? FirstAirDate, string? PosterPath,
-    bool Adult, MediaInfo? MediaInfo, Season[]? Seasons)
+    bool Adult, MediaInfo? MediaInfo, Season[]? Seasons, string? Status = null)
 {
     [System.Text.Json.Serialization.JsonPropertyName("title")]
     public string? MovieTitle { get; init; }
     public string DisplayName => MovieTitle ?? Name ?? "";
-    public int? Year => int.TryParse((ReleaseDate ?? FirstAirDate)?.Split('-')[0], out var year) ? year : null;
+    public string? RawReleaseDate => string.IsNullOrWhiteSpace(ReleaseDate) ? FirstAirDate : ReleaseDate;
+    public int? Year => int.TryParse(RawReleaseDate?.Split('-')[0], out var year) ? year : null;
+
+    public DateOnly? ParsedReleaseDate =>
+        DateOnly.TryParseExact(RawReleaseDate, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
+            ? d : null;
+
+    public string? FormattedReleaseDate =>
+        ParsedReleaseDate is { } d ? d.ToString("MMM d, yyyy", CultureInfo.InvariantCulture)
+        : !string.IsNullOrWhiteSpace(RawReleaseDate) ? RawReleaseDate : null;
+
+    public bool IsUnreleased =>
+        Status is "Rumored" or "Planned" or "In Production" or "Post Production"
+        || (ParsedReleaseDate is { } d && d > DateOnly.FromDateTime(DateTime.UtcNow));
 }
+
 internal sealed record PublicSettings(bool? PartialRequestsEnabled);
 
 public sealed class Seerr : IDisposable
@@ -43,7 +61,7 @@ public sealed class Seerr : IDisposable
 
         using var msg = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, new Uri(root, "api/v1/" + path));
         msg.Headers.Add("X-Api-Key", config.ApiKey);
-        if (account.HasValue) msg.Headers.Add("X-Api-User", account.Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (account.HasValue) msg.Headers.Add("X-Api-User", account.Value.ToString(CultureInfo.InvariantCulture));
         if (body is not null) msg.Content = JsonContent.Create(body);
         using var response = await _http.SendAsync(msg, ct);
         if (!response.IsSuccessStatusCode)
@@ -118,7 +136,13 @@ public sealed class Seerr : IDisposable
         (await Send<ResultPage<Title>>(c, "search?page=1&query=" + Uri.EscapeDataString(term), account, null, ct)).Results;
 
     internal Task<Title> Details(Card card, CancellationToken ct) =>
-        Send<Title>(card.Config, $"{card.Type}/{card.Title.Id}", card.Account, null, ct);
+        Details(card.Config, card.Account, card.Type, card.Title.Id, ct);
+
+    internal Task<Title> Details(Configuration c, int account, string mediaType, int tmdbId, CancellationToken ct) =>
+        Send<Title>(c, $"{mediaType}/{tmdbId}", account, null, ct);
+
+    internal async Task<SeerrRequest[]> Requests(Configuration c, int account, CancellationToken ct) =>
+        (await Send<ResultPage<SeerrRequest>>(c, "request?take=40&filter=all&sort=added", account, null, ct)).Results;
 
     internal async Task<int> Submit(Card card, CancellationToken ct)
     {
