@@ -22,7 +22,7 @@ internal sealed record SearchSpec(string Term, int Season, bool TvOnly)
     public static SearchSpec FromTerm(string term)
     {
         var suffix = Regex.Match(term, @"\s+(?:s([1-9][0-9]{0,3})|all seasons)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        if (!suffix.Success) return new(term, 1, false);
+        if (!suffix.Success) return new(term, 0, false);
         int season = suffix.Groups[1].Success ? int.Parse(suffix.Groups[1].Value) : 0;
         return new(term[..suffix.Index].TrimEnd(), season, true);
     }
@@ -57,13 +57,18 @@ internal sealed record Card(
     int Account,
     Title Title,
     int Season,
-    QBitTorrent? StandaloneTorrent = null)
+    QBitTorrent? StandaloneTorrent = null,
+    Guid? ParentSeriesId = null,
+    string? SeasonPosterPath = null,
+    string? SeasonOverview = null)
 {
+    public bool IsSeasonCard => ParentSeriesId.HasValue && Season > 0;
     public string Type => Title.MediaType ?? "movie";
-    public BaseItemKind Kind => Type == "movie" ? BaseItemKind.Movie : BaseItemKind.Series;
+    public BaseItemKind Kind => Type == "movie" ? BaseItemKind.Movie : IsSeasonCard ? BaseItemKind.Season : BaseItemKind.Series;
     public string Scope => Type == "movie" ? "Movie" : Season == 0 ? "All seasons" : $"Season {Season}";
     public string ArtworkTag => Id.ToString("N");
-    public bool WithPoster => Seerr.HasPoster(Title.PosterPath);
+    public string? EffectivePosterPath => Seerr.HasPoster(SeasonPosterPath) ? SeasonPosterPath : Title.PosterPath;
+    public bool WithPoster => Seerr.HasPoster(EffectivePosterPath);
 
     public State ReadState(Title data, bool detail, IReadOnlyDictionary<string, QBitTorrent>? qbit = null)
     {
@@ -142,16 +147,22 @@ internal sealed record Card(
     };
 
     public UserItemDataDto UserData(State state) => new() { ItemId = Id, Key = Id.ToString("N"), IsFavorite = state.Covered };
-    private string Caption(State state) => $"{state.Label} · {Title.DisplayName}" + (StandaloneTorrent is null && Type == "tv" ? $" · {Scope}" : "");
+    private string Caption(State state) => IsSeasonCard
+        ? $"{state.Label} · Season {Season}"
+        : $"{state.Label} · {Title.DisplayName}" + (StandaloneTorrent is null && Type == "tv" && Season > 0 ? $" · {Scope}" : "");
 
     public BaseItemDto Item(string server, State state, bool roku, string? overview = null)
     {
-        var instruction = state.Covered || !state.Allowed ? state.Label + "." :
-            $"Press Favorite (heart) to request {(Type == "movie" ? "this movie" : Scope.ToLowerInvariant())} through Seerr.";
+        var instruction = state.Covered || !state.Allowed ? state.Label + "."
+            : Type == "tv" && !IsSeasonCard && Season == 0 && !roku
+                ? "Select a season below to request individual seasons, or press Favorite (heart) here to request all seasons through Seerr."
+                : $"Press Favorite (heart) to request {(Type == "movie" ? "this movie" : Scope.ToLowerInvariant())} through Seerr.";
         var header = state.Detail is null ? instruction : state.Covered ? state.Detail : state.Detail + " " + instruction;
-        var body = overview ?? Title.Overview ?? "";
+        var body = overview ?? SeasonOverview ?? Title.Overview ?? "";
         return new() {
             Id = Id, ServerId = server, Name = Caption(state), OriginalTitle = Title.DisplayName,
+            SeriesId = ParentSeriesId, SeriesName = IsSeasonCard ? Title.DisplayName : null,
+            IndexNumber = IsSeasonCard ? Season : null,
             Type = roku || StandaloneTorrent is not null ? BaseItemKind.Movie : Kind,
             MediaType = roku || StandaloneTorrent is not null || Type == "movie" ? MediaType.Video : MediaType.Unknown,
             LocationType = LocationType.Virtual, PlayAccess = PlayAccess.None,
@@ -241,6 +252,28 @@ public sealed class CardStore(Seerr seerr, QBit qbit) : IDisposable
             Save(key, result, TimeSpan.FromSeconds(12));
             return result;
         } finally { gate.Release(); }
+    }
+
+    internal async Task<(Card Card, State State)[]> GetSeasons(Card seriesCard, CancellationToken ct)
+    {
+        var detailTask = seerr.Details(seriesCard, ct);
+        var qbitTask = qbit.GetTorrentMap(seriesCard.Config, ct);
+        await Task.WhenAll(detailTask, qbitTask);
+        var detail = detailTask.Result with { MediaType = "tv" };
+        var torrents = qbitTask.Result;
+        var list = new List<(Card, State)>();
+        foreach (var s in (detail.Seasons ?? []).Where(s => s.SeasonNumber > 0 && s.EpisodeCount > 0).OrderBy(s => s.SeasonNumber)) {
+            var id = DeriveId($"{seriesCard.Owner:N}/{seriesCard.Account}/tv/{detail.Id}/season/{s.SeasonNumber}");
+            var overview = !string.IsNullOrWhiteSpace(s.Overview)
+                ? s.Overview
+                : $"{s.EpisodeCount} {(s.EpisodeCount == 1 ? "episode" : "episodes")}" + (string.IsNullOrWhiteSpace(s.AirDate) ? "." : $" · Aired {s.AirDate}.");
+            var seasonCard = new Card(id, seriesCard.Owner, seriesCard.Config, seriesCard.Account, detail, s.SeasonNumber,
+                ParentSeriesId: seriesCard.Id, SeasonPosterPath: s.PosterPath, SeasonOverview: overview);
+            Save(id, seasonCard, TimeSpan.FromHours(1));
+            var state = Status(seasonCard, detail, true, torrents);
+            list.Add((seasonCard, state));
+        }
+        return list.ToArray();
     }
 
     internal State Status(Card card, Title data, bool detail, IReadOnlyDictionary<string, QBitTorrent>? torrents = null)

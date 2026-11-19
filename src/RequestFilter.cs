@@ -213,7 +213,7 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, QBit qbit, ISe
         if (card is not null && !ReferenceEquals(config, card.Config)) return new NotFoundResult();
         if (card is not null && controller == "Image" && action is "GetItemImage" or "GetItemImageByIndex" or "GetItemImage2") {
             if (!card.WithPoster || Arg<ImageType>("imageType") != ImageType.Primary) return new NotFoundResult();
-            return new FileContentResult(await seerr.Poster(card.Title.PosterPath!, ct), "image/jpeg");
+            return new FileContentResult(await seerr.Poster(card.EffectivePosterPath!, ct), "image/jpeg");
         }
         if (isDownloadsFolder && controller == "Image") return new NotFoundResult();
 
@@ -290,9 +290,18 @@ internal sealed class RequestFilter(CardStore store, Seerr seerr, QBit qbit, ISe
                 var detail = detailTask.Result;
                 var state = store.Status(card, detail, true, qbitTask.Result);
                 if (controller == "Items" && !items) return new OkObjectResult(card.UserData(state));
-                var item = card.Item(server.SystemId, state, roku, detail.Overview);
+                var item = card.Item(server.SystemId, state, roku, card.IsSeasonCard ? card.SeasonOverview : detail.Overview);
                 return new OkObjectResult(items ? new QueryResult<BaseItemDto>([item]) : item);
             }
+        }
+        if (card.Type == "tv" && !card.IsSeasonCard &&
+            ((controller == "TvShows" && action == "GetSeasons") || (items && Arg<Guid>("parentId") == card.Id))) {
+            var seasons = await store.GetSeasons(card, ct);
+            var start = Math.Max(0, Arg<int>("startIndex") ?? 0);
+            var limit = Math.Clamp(Arg<int>("limit") ?? 100, 0, 200);
+            var slice = seasons.Skip(start).Take(limit)
+                .Select(s => s.Card.Item(server.SystemId, s.State, roku)).ToArray();
+            return new OkObjectResult(new QueryResult<BaseItemDto>(start, seasons.Length, slice));
         }
         if (controller == "Library" && action == "GetThemeMedia")
             return new OkObjectResult(new AllThemeMediaResult());

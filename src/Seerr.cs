@@ -16,7 +16,14 @@ internal sealed record Account(int Id, string? JellyfinUserId, long? PlexId, str
     public bool Matches(Guid owner) => Id > 0 && Guid.TryParse(JellyfinUserId, out var id) && owner == id;
 }
 internal sealed record ResultPage<T>(T[] Results);
-internal sealed record Season(int SeasonNumber, int EpisodeCount, int Status);
+internal sealed record Season(
+    int SeasonNumber,
+    int EpisodeCount,
+    int Status,
+    string? Name = null,
+    string? Overview = null,
+    string? AirDate = null,
+    string? PosterPath = null);
 internal sealed record RequestInfo(bool Is4k, int Status, Season[]? Seasons);
 internal sealed record MediaInfo(int Status, Season[]? Seasons, RequestInfo[]? Requests, Download[]? DownloadStatus);
 internal sealed record RequestMedia(int TmdbId, string? MediaType, int Status, Download[]? DownloadStatus);
